@@ -59,6 +59,24 @@ const AUTORISES = new Set([
 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 
+// Plusieurs « profils » d'en-têtes : si un site refuse le premier (403 ou 406), on essaie le suivant.
+const PROFILS = [
+  {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+    'Accept': 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8',
+    'Accept-Language': 'fr,en;q=0.8,ar;q=0.6'
+  },
+  {
+    'User-Agent': 'Feedly/1.0 (+http://www.feedly.com/fetcher.html; like FeedFetcher-Google)',
+    'Accept': '*/*'
+  },
+  {
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9'
+  }
+];
+
 export default {
   async fetch(request, env, ctx) {
     const u = new URL(request.url);
@@ -72,19 +90,18 @@ export default {
     let rep = await cache.match(request);
     if (rep) return rep;
 
-    let r;
-    try {
-      r = await fetch(t.toString(), {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-          'Accept': 'application/rss+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8',
-          'Accept-Language': 'fr,en;q=0.8,ar;q=0.6'
-        },
-        redirect: 'follow'
-      });
-    } catch (e) {
-      return new Response('Flux injoignable', { status: 502, headers: CORS });
+    let r = null;
+    for (const profil of PROFILS) {
+      try {
+        r = await fetch(t.toString(), { headers: profil, redirect: 'follow' });
+      } catch (e) {
+        r = null;
+        continue;
+      }
+      if (r.ok || (r.status !== 403 && r.status !== 406)) break;
     }
+    if (!r) return new Response('Flux injoignable', { status: 502, headers: CORS });
+
     const corps = await r.text();
     rep = new Response(corps, {
       status: r.status,
