@@ -3,7 +3,7 @@
 //  - GET /resume?t=TITRE&e=EXTRAIT&l=LANG&s=SOURCE -> résumé IA (Workers AI, sans clé API)
 const AUTORISES = new Set(["2m.ma","arabic.euronews.com","arabic.rt.com","english.alarabiya.net","feeds.bbci.co.uk","feeds.bloomberg.com","feeds.nbcnews.com","feeds.skynews.com","foreignpolicy.com","fr.euronews.com","fr.hespress.com","fr.le360.ma","information.tv5monde.com","medias24.com","moxie.foxnews.com","news.un.org","rss.cnn.com","rss.dw.com","rss.nytimes.com","telquel.ma","www.aa.com.tr","www.abc.net.au","www.alarabiya.net","www.aljazeera.com","www.aljazeera.net","www.bfmtv.com","www.cbc.ca","www.cbsnews.com","www.cgtn.com","www.cnbc.com","www.courrierinternational.com","www.economist.com","www.euronews.com","www.france24.com","www.francetvinfo.fr","www.ft.com","www.hespress.com","www.jeuneafrique.com","www.lemonde.fr","www.mapexpress.ma","www.medi1tv.com","www.mediapart.fr","www.monde-diplomatique.fr","www.nature.com","www.newscientist.com","www.pbs.org","www.rfi.fr","www.rt.com","www.sciencedaily.com","www.scientificamerican.com","www.skynewsarabia.com","www.theafricareport.com","www.trtworld.com"]);
 
-const MODELE = '@cf/google/gemma-3-12b-it';
+const MODELES = ['@cf/google/gemma-3-12b-it', '@cf/meta/llama-3.1-8b-instruct', '@cf/meta/llama-3.1-8b-instruct-fast'];
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 const ORIGINES_OK = ['https://mahmoh1960.github.io', 'https://localhost', 'http://localhost', 'capacitor://localhost'];
 
@@ -55,20 +55,23 @@ async function resume(request, env, ctx) {
     'Réponds uniquement par le résumé.\n\n' +
     'Source : ' + source + '\nTitre : ' + titre + '\nExtrait : ' + (extrait || '(aucun extrait fourni)');
 
-  let sortie;
-  try {
-    sortie = await env.AI.run(MODELE, {
-      messages: [{ role: 'user', content: consigne }],
-      max_tokens: 220,
-      temperature: 0.2
-    });
-  } catch (e) {
-    const msg = String(e && e.message ? e.message : e);
-    if (/limit|neuron|quota|capacity|4006/i.test(msg)) {
-      return json({ erreur: 'Limite quotidienne atteinte, réessayez demain' }, 429);
+  let sortie, derniere = '';
+  for (const modele of MODELES) {
+    try {
+      sortie = await env.AI.run(modele, {
+        messages: [{ role: 'user', content: consigne }],
+        max_tokens: 220,
+        temperature: 0.2
+      });
+      if (sortie) break;
+    } catch (e) {
+      derniere = String(e && e.message ? e.message : e);
+      if (/limit|neuron|quota|capacity|4006/i.test(derniere)) {
+        return json({ erreur: 'Limite quotidienne atteinte, réessayez demain' }, 429);
+      }
     }
-    return json({ erreur: 'Service IA indisponible' }, 502);
   }
+  if (!sortie) return json({ erreur: 'Service IA indisponible : ' + derniere.slice(0, 160) }, 502);
 
   let texte = sortie && (sortie.response ?? (sortie.choices && sortie.choices[0] && sortie.choices[0].message && sortie.choices[0].message.content) ?? (sortie.result && sortie.result.response));
   texte = (texte || '').toString().replace(/^\s*(résumé|summary|الملخص)\s*[:：]\s*/i, '').trim();
