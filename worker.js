@@ -1,7 +1,7 @@
 // Worker Cloudflare : relais de flux RSS + résumés IA pour l'application « Actualités du jour ».
 //  - GET /?url=ADRESSE_DU_FLUX            -> relaie un flux RSS (sites de la liste uniquement)
 //  - GET /resume?t=TITRE&e=EXTRAIT&l=LANG&s=SOURCE -> résumé IA (Workers AI, sans clé API)
-const AUTORISES = new Set(["2m.ma","arabic.euronews.com","arabic.rt.com","english.alarabiya.net","feeds.bbci.co.uk","feeds.bloomberg.com","feeds.nbcnews.com","feeds.skynews.com","foreignpolicy.com","fr.euronews.com","fr.hespress.com","fr.le360.ma","information.tv5monde.com","medias24.com","moxie.foxnews.com","news.un.org","rss.cnn.com","rss.dw.com","rss.nytimes.com","telquel.ma","www.aa.com.tr","www.abc.net.au","www.alarabiya.net","www.aljazeera.com","www.aljazeera.net","www.bfmtv.com","www.cbc.ca","www.cbsnews.com","www.cgtn.com","www.cnbc.com","www.courrierinternational.com","www.economist.com","www.euronews.com","www.france24.com","www.francetvinfo.fr","www.ft.com","www.hespress.com","www.jeuneafrique.com","www.lemonde.fr","www.mapexpress.ma","www.medi1tv.com","www.mediapart.fr","www.monde-diplomatique.fr","www.nature.com","www.newscientist.com","www.pbs.org","www.rfi.fr","www.rt.com","www.sciencedaily.com","www.scientificamerican.com","www.skynewsarabia.com","www.theafricareport.com","www.trtworld.com"]);
+const AUTORISES = new Set(["2m.ma","verdict.justia.com","www.actu-juridique.fr","www.hrw.org","www.jurist.org","www.justsecurity.org","arabic.euronews.com","arabic.rt.com","english.alarabiya.net","feeds.bbci.co.uk","feeds.bloomberg.com","feeds.nbcnews.com","feeds.skynews.com","foreignpolicy.com","fr.euronews.com","fr.hespress.com","fr.le360.ma","information.tv5monde.com","medias24.com","moxie.foxnews.com","news.un.org","rss.cnn.com","rss.dw.com","rss.nytimes.com","telquel.ma","www.aa.com.tr","www.abc.net.au","www.alarabiya.net","www.aljazeera.com","www.aljazeera.net","www.bfmtv.com","www.cbc.ca","www.cbsnews.com","www.cgtn.com","www.cnbc.com","www.courrierinternational.com","www.economist.com","www.euronews.com","www.france24.com","www.francetvinfo.fr","www.ft.com","www.hespress.com","www.jeuneafrique.com","www.lemonde.fr","www.mapexpress.ma","www.medi1tv.com","www.mediapart.fr","www.monde-diplomatique.fr","www.nature.com","www.newscientist.com","www.pbs.org","www.rfi.fr","www.rt.com","www.sciencedaily.com","www.scientificamerican.com","www.skynewsarabia.com","www.theafricareport.com","www.trtworld.com"]);
 
 const MODELES = ['@cf/google/gemma-3-12b-it', '@cf/meta/llama-3.1-8b-instruct', '@cf/meta/llama-3.1-8b-instruct-fast'];
 const CORS = { 'Access-Control-Allow-Origin': '*' };
@@ -37,7 +37,8 @@ async function resume(request, env, ctx) {
   if (!env.AI) return json({ erreur: 'IA non configurée sur le relais' }, 503);
 
   const u = new URL(request.url);
-  const titre = (u.searchParams.get('t') || '').trim().slice(0, 300);
+  const synth = u.searchParams.get('m') === '1';
+  const titre = (u.searchParams.get('t') || '').trim().slice(0, synth ? 2500 : 300);
   const extrait = (u.searchParams.get('e') || '').trim().slice(0, 600);
   const lang = u.searchParams.get('l') || 'fr';
   const source = (u.searchParams.get('s') || '').trim().slice(0, 80);
@@ -48,19 +49,21 @@ async function resume(request, env, ctx) {
   if (deja) return deja;
 
   const langue = { fr: 'français', en: 'anglais', ar: 'arabe' }[lang] || 'français';
-  const consigne =
-    "Résume l'information d'actualité ci-dessous en 2 ou 3 phrases courtes, claires et factuelles. " +
-    'Écris le résumé en ' + langue + ', la langue du texte. ' +
-    "N'ajoute aucun fait absent du texte ; si le texte est trop bref, reformule-le simplement sans rien inventer. " +
-    'Réponds uniquement par le résumé.\n\n' +
-    'Source : ' + source + '\nTitre : ' + titre + '\nExtrait : ' + (extrait || '(aucun extrait fourni)');
+  const consigne = synth
+    ? 'Voici les principaux titres du jour de la rubrique « ' + source + ' ». Rédige une synthèse de 4 à 5 phrases qui regroupe les faits importants, en ' + langue +
+      ". N'ajoute aucun fait absent des titres. Réponds uniquement par la synthèse.\n\nTitres :\n" + titre
+    : "Résume l'information d'actualité ci-dessous en 2 ou 3 phrases courtes, claires et factuelles. " +
+      'Écris le résumé en ' + langue + ', la langue du texte. ' +
+      "N'ajoute aucun fait absent du texte ; si le texte est trop bref, reformule-le simplement sans rien inventer. " +
+      'Réponds uniquement par le résumé.\n\n' +
+      'Source : ' + source + '\nTitre : ' + titre + '\nExtrait : ' + (extrait || '(aucun extrait fourni)');
 
   let sortie, derniere = '';
   for (const modele of MODELES) {
     try {
       sortie = await env.AI.run(modele, {
         messages: [{ role: 'user', content: consigne }],
-        max_tokens: 220,
+        max_tokens: synth ? 380 : 220,
         temperature: 0.2
       });
       if (sortie) break;
@@ -77,7 +80,7 @@ async function resume(request, env, ctx) {
   texte = (texte || '').toString().replace(/^\s*(résumé|summary|الملخص)\s*[:：]\s*/i, '').trim();
   if (!texte) return json({ erreur: 'Réponse vide du modèle' }, 502);
 
-  const rep = json({ resume: texte }, 200, { 'Cache-Control': 'public, max-age=604800' });
+  const rep = json({ resume: texte }, 200, { 'Cache-Control': 'public, max-age=' + (synth ? 1800 : 604800) });
   ctx.waitUntil(cache.put(request, rep.clone()));
   return rep;
 }
